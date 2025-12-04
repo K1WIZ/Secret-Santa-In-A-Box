@@ -1,0 +1,8 @@
+{
+  "name": "wizworks/secret-santa-email-bot",
+  "description": "Secret Santa E-mail Bot with wish lists and tracking",
+  "require": {
+    "phpmailer/phpmailer": "^6.9"
+  }
+}
+
