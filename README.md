@@ -38,6 +38,7 @@ In other words:
   - Commit pairings to DB  
   - Test SMTP email  
 - 🗄 Uses MySQL for persistent year-over-year tracking  
+- 💫 CSV user import (see sample participants CSV file)
 - 📮 Uses PHPMailer + Gmail SMTP  
 
 ---
