@@ -103,7 +103,14 @@ docker exec -it secretsanta_app php /var/www/html/secret_santa.php -force
 
 You can also use the Admin page to test pairings without emailing or writing to the DB, using your favorite web browser:
 ```
-https://yourdomain.com:8080/admin_secret_santa.php?key=YourSecretKey
+https://yourdomain.com:8080/admin_secret_santa.php?key=changeme
+
+NOTE: you can change the admin secret key in the admin_secret_santa.php file.  Look
+for the line:
+$ADMIN_KEY = 'changeme';
+
+and set it to what you desire.  For dev purposes, this doesn't need changing.  In
+production environments PLEASE CHANGE THIS!
 ```
 Tools available:
 
