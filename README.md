@@ -82,8 +82,9 @@ At a minimum!
 ```
 docker-compose up -d --build
 ```
-(Add your recipients to the table!)
-
+(Add your recipients to the table! - use the example participants.csv file and populate it with 
+your people.  Then go to http://yourdomain:8080/import_users.php?key=changeme to upload your CSV.
+)
 ### 4. Inject your "people" into the participants database (IMPORTANT: make sure email addresses are accurate!)
 ```
 INSERT INTO participants (first_name, last_name, email, family_unit, wish_key)
