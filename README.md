@@ -6,11 +6,14 @@ This bot:
 
 - Draws randomized Secret Santa pairings  
 - Prevents same-household assignments  
+- Now handles Wish Lists!
 - Avoids repeating last year’s pairings  
 - Sends beautiful Christmas-themed HTML emails  
 - Sends the master list privately to the admin  
 - Runs automatically every Thanksgiving Day at noon  
-- Can also be triggered manually with `-force`  
+- Can also be triggered manually with `-force`
+- Now includes usage analytics! (track opens!)  
+- Now is packaged to run as a Docker container
 
 In other words:
 
@@ -20,9 +23,11 @@ In other words:
 
 ## 🎁 Features
 
+- 🐳 Now runs as a docker container
 - 🎅 Automatic Thanksgiving Day draw  
 - 🌐 Manual run via CLI `-force`  
 - 💌 Sends individual HTML emails to participants  
+- 👾 Now provides email tracking for "opens"
 - 🎄 Colorful Christmas-themed template  
 - 🔒 Avoids same-family matchups  
 - 🔁 Avoids pairing repeats from last year
@@ -37,98 +42,68 @@ In other words:
 
 ---
 
-## 🛠 Installation & Setup (Ubuntu Server)
+## 🛠 Installation & Setup (Docker)
 
-### 1. Install dependencies
-
+### 1. Clone the project files from github
 ```
-sudo apt update
-sudo apt install apache2 php php-mbstring php-xml php-mysql php-cli unzip composer
-sudo mkdir -p /var/www/html/ss
-cd /var/www/html/ss
-composer require phpmailer/phpmailer
+mkdir /opt/ss
+cd /opt/ss
+git clone https://github.com/K1WIZ/Secret-Santa-In-A-Box.git
 ```
-### 2. Create a new database and use the SQL script to initialize a table
+### 2. Modify docker-compose.yml and set environment variables to suit your environment
 ```
-CREATE TABLE participants (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    first_name VARCHAR(100) NOT NULL,
-    last_name  VARCHAR(100) NOT NULL,
-    email      VARCHAR(255) NOT NULL,
-    family_unit INT NOT NULL,
+Comments in the docker-compose.yml file.  But basically, you want to set these env variables:
 
-    -- Wishlist fields
-    wish_item1 VARCHAR(255) NULL,
-    wish_item2 VARCHAR(255) NULL,
-    wish_item3 VARCHAR(255) NULL,
+      APP_BASE_URL: "http://localhost:8080"
+      DB_HOST: "db"
+      DB_PORT: "3306"
+      DB_NAME: "secret_santa"
+      DB_USER: "secretsanta"
+      DB_PASSWORD: "changeme"
+      # Timezone
+      APP_TZ: "America/New_York"
+      TZ: "America/New_York"
+      # For dev: send mail to MailHog instead of real SMTP
+      SMTP_HOST: "mailhog"
+      SMTP_PORT: "1025"
+      SMTP_USER: ""
+      SMTP_PASS: ""  # ⚠️ Use a Gmail App Password, not your actual Gmail password! (if using gmail smtp)
+      SMTP_FROM_EMAIL: "santa@example.test"
+      SMTP_FROM_NAME: "Secret Santa Bot"
+      TZ: "America/New_York"
+      MYSQL_ROOT_PASSWORD: "changeme"
+      MYSQL_DATABASE: "secret_santa"
+      MYSQL_USER: "secretsanta"
+      MYSQL_PASSWORD: "changeme"
 
-    -- Per-user secret key for wishlist access
-    wish_key   VARCHAR(64)  NULL,
-
-    -- Optional but recommended: enforce unique keys once generated
-    UNIQUE KEY uniq_wish_key (wish_key)
-);
-
--- Table storing pairings for each year
-CREATE TABLE secret_santa_pairs (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    year INT NOT NULL,
-    giver_id INT NOT NULL,
-    receiver_id INT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+At a minimum!
+```
+### 3. run commands to build and run the app using docker-compose:
+```
+docker-compose up -d --build
 ```
 (Add your recipients to the table!)
 
-### 3. Create a config.php file
+### 4. Inject your "people" into the participants database (IMPORTANT: make sure email addresses are accurate!)
 ```
-<?php
-// config.php
-
-return [
-    'db' => [
-        'dsn'      => 'mysql:host=localhost;dbname=secret_santa;charset=utf8mb4',
-        'user'     => 'dbuser',
-        'password' => 'dbpassword',
-    ],
-
-    // Gmail SMTP settings (use an App Password – NOT your raw Gmail password)
-    'smtp' => [
-        'host'       => 'smtp.gmail.com',
-        'port'       => 587,
-        'username'   => 'yourgmail@gmail.com',
-        'password'   => 'your_app_password_here',
-        'from_email' => 'yourgmail@gmail.com',
-        'from_name'  => 'Secret Santa Bot',
-    ],
-    'app' => [
-        // No trailing slash
-        'base_url' => 'https://yout.domain/ss'
-    ],
-];
-```
-⚠️ Use a Gmail App Password, not your actual Gmail password!
-
-### 4. Set permissions on files
-```
-sudo chown -R www-data:www-data /var/www/html/ss
-sudo chmod -R 755 /var/www/html/ss
+INSERT INTO participants (first_name, last_name, email, family_unit, wish_key)
+VALUES ('Test', 'User', 'test@example.com', 1, '');
 ```
 ### 5. Add a cron job to automatically generate and email secret santa recipients
 ```
-0 12 * 11 *   root  /usr/bin/php /var/www/html/wizworks/ss/secret_santa.php >/var/log/secret_santa.log 2>&1
+0 12 * 11 *   root  /usr/bin/docker exec -it secretsanta_app php /var/www/html/secret_santa.php
 ```
 (NOTE: the script will check if it's Thanksgiving Day when run, and if it is, will generate and email pairings)
 
 ### 6. Testing
 If you wish to test the script, you can do so by calling the script and using the `-force` flag like so:
 ```
-php /var/www/html/ss/secret_santa.php -force
+docker exec -it secretsanta_app php /var/www/html/secret_santa.php -force
 ```
 
 You can also use the Admin page to test pairings without emailing or writing to the DB, using your favorite web browser:
 ```
-https://yourdomain.com/ss/admin_secret_santa.php?key=YourSecretKey
+https://yourdomain.com:8080/admin_secret_santa.php?key=YourSecretKey
 ```
 Tools available:
 
