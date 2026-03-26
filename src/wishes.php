@@ -9,8 +9,19 @@
 require __DIR__ . '/vendor/autoload.php';
 $config = require __DIR__ . '/config.php';
 
+session_start();
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+        die('CSRF token validation failed.');
+    }
+}
 
 try {
     $pdo = new PDO(
@@ -94,9 +105,9 @@ $savedMessage = null;
 // Handle wishlist form submission
 // -------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $w1 = trim($_POST['wish_item1'] ?? '');
-    $w2 = trim($_POST['wish_item2'] ?? '');
-    $w3 = trim($_POST['wish_item3'] ?? '');
+    $w1 = mb_substr(trim($_POST['wish_item1'] ?? ''), 0, 255);
+    $w2 = mb_substr(trim($_POST['wish_item2'] ?? ''), 0, 255);
+    $w3 = mb_substr(trim($_POST['wish_item3'] ?? ''), 0, 255);
 
     $upd = $pdo->prepare("
         UPDATE participants
@@ -417,6 +428,7 @@ $recName = $recipient ? ($recipient['first_name'] . ' ' . $recipient['last_name'
         <div class="section-inner">
             <h2>Your Wish List</h2>
             <form method="post">
+                <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
                 <label for="wish_item1">Wish Item #1</label>
                 <input type="text" name="wish_item1" id="wish_item1"
                        value="<?php echo h($me['wish_item1'] ?? ''); ?>">

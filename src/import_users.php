@@ -13,6 +13,17 @@
 require __DIR__ . '/vendor/autoload.php';
 $config = require __DIR__ . '/config.php';
 
+session_start();
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+        die('CSRF token validation failed.');
+    }
+}
+
 if (!empty($config['app']['timezone'])) {
     date_default_timezone_set($config['app']['timezone']);
 }
@@ -20,7 +31,7 @@ if (!empty($config['app']['timezone'])) {
 // ---------------------------------------------------------
 // Simple key auth
 // ---------------------------------------------------------
-$adminKey = 'changeme'; // adjust to match your admin_secret_santa.php
+$adminKey = $config['app']['admin_key'] ?? 'changeme';
 $providedKey = $_GET['key'] ?? '';
 
 if ($providedKey !== $adminKey) {
@@ -183,6 +194,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['csv_file'])) {
                         continue;
                     }
 
+                    if (strlen($firstName) > 100 || strlen($lastName) > 100) {
+                        $summary['skipped']++;
+                        $results[] = [
+                            'row'    => $lineNo,
+                            'name'   => $displayName,
+                            'email'  => $email,
+                            'status' => 'skipped',
+                            'note'   => 'Names must be 100 characters or less.',
+                        ];
+                        continue;
+                    }
+
+                    if (strlen($email) > 255) {
+                        $summary['skipped']++;
+                        $results[] = [
+                            'row'    => $lineNo,
+                            'name'   => $displayName,
+                            'email'  => $email,
+                            'status' => 'skipped',
+                            'note'   => 'Email must be 255 characters or less.',
+                        ];
+                        continue;
+                    }
+
                     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
                         $summary['skipped']++;
                         $results[] = [
@@ -195,14 +230,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['csv_file'])) {
                         continue;
                     }
 
-                    if (!ctype_digit($familyUnit)) {
+                    if (!ctype_digit($familyUnit) || (int)$familyUnit < 0) {
                         $summary['skipped']++;
                         $results[] = [
                             'row'    => $lineNo,
                             'name'   => $displayName,
                             'email'  => $email,
                             'status' => 'skipped',
-                            'note'   => 'family_unit must be an integer.',
+                            'note'   => 'family_unit must be a non-negative integer.',
                         ];
                         continue;
                     }
@@ -390,6 +425,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['csv_file'])) {
         <div class="panel-inner">
             <h2 style="margin-top:0;color:#ffe9a4;font-size:18px;">CSV Upload</h2>
             <form method="post" enctype="multipart/form-data">
+                <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
                 <label for="csv_file">Choose CSV file:</label>
                 <input type="file" name="csv_file" id="csv_file" accept=".csv" required>
 

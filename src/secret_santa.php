@@ -304,7 +304,7 @@ $adminEmail = 'john@wizworks.net';
 // ---------------------------------------------------------
 // Build HTML email body for recipient (with wishlist links + tracking pixel)
 // ---------------------------------------------------------
-function buildRecipientEmailHtml(array $giver, array $receiver, int $year, string $baseUrl): string
+function buildRecipientEmailHtml(array $giver, array $receiver, int $year, string $baseUrl, string $budget): string
 {
     $giverName    = htmlspecialchars($giver['first_name'] . ' ' . $giver['last_name']);
     $receiverName = htmlspecialchars($receiver['first_name'] . ' ' . $receiver['last_name']);
@@ -344,6 +344,9 @@ function buildRecipientEmailHtml(array $giver, array $receiver, int $year, strin
         <div style="font-size:30px;font-weight:bold;color:#b30000;margin:10px 0 10px;">
           {$receiverName}
         </div>
+        <p style="font-size:14px;color:#333;margin:15px 0 5px;font-weight:bold;">
+          💰 Budget Limit: {$budget}
+        </p>
         <p style="font-size:13px;color:#666;margin:10px 0 15px;">
           🎁 Please keep this a secret and bring some holiday cheer to your person! 🎁
         </p>
@@ -389,7 +392,8 @@ foreach ($participants as $giver) {
         continue;
     }
 
-    $htmlBody = buildRecipientEmailHtml($giver, $receiver, $year, $baseUrl);
+    $budget = htmlspecialchars($config['app']['budget_limit'] ?? '$50');
+    $htmlBody = buildRecipientEmailHtml($giver, $receiver, $year, $baseUrl, $budget);
     $subject  = "Your Secret Santa Person for $year 🎄";
 
     try {
@@ -405,6 +409,7 @@ foreach ($participants as $giver) {
 
         $mail->AltBody = "Hi {$giver['first_name']},\n\n"
             . "Your Secret Santa person for $year is {$receiver['first_name']} {$receiver['last_name']}.\n\n"
+            . "Budget Limit: {$budget}\n\n"
             . "View their wish list and enter your own wishes here:\n$wishlistUrl\n\n"
             . "Please keep this a secret and bring some holiday cheer!";
 

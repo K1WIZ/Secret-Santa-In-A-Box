@@ -7,6 +7,8 @@ services:
     ports:
       - "8080:80"
     environment:
+      ADMIN_KEY: "changeme"
+      BUDGET_LIMIT: "30"
       APP_BASE_URL: "http://localhost:8080"
 
       DB_HOST: "db"

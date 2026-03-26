@@ -8,6 +8,11 @@
 require __DIR__ . '/vendor/autoload.php'; // PHPMailer via Composer
 $config = require __DIR__ . '/config.php';
 
+session_start();
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
 
@@ -29,7 +34,7 @@ try {
 // Minimal "auth" – change this to something safer or integrate with real auth
 // Example usage: /admin_secret_santa.php?key=changeme
 // -----------------------------------------------------------------
-$ADMIN_KEY = 'changeme';
+$ADMIN_KEY = $config['app']['admin_key'] ?? 'changeme';
 if (!isset($_GET['key']) || $_GET['key'] !== $ADMIN_KEY) {
     http_response_code(403);
     echo "Forbidden. Admin key missing or incorrect.";
@@ -145,12 +150,21 @@ if (count($participants) < 2) {
 // ------------------------
 // Handle form submit
 // ------------------------
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+        die('CSRF token validation failed.');
+    }
+}
+
 $generatedPairs = [];
 $debugMessage   = '';
 $error          = $error ?? null;
 
 $defaultYear = (int)date('Y');
 $year        = isset($_POST['year']) ? (int)$_POST['year'] : $defaultYear;
+if ($year < 2000 || $year > 2100) {
+    $year = $defaultYear;
+}
 $avoidSameAsLastYear = !empty($_POST['avoid_last_year']);
 $commitToDb          = !empty($_POST['commit_to_db']);
 $action              = $_POST['action'] ?? 'generate';
@@ -162,6 +176,161 @@ $testEmail        = $_POST['test_email'] ?? $defaultTestEmail;
 // Utility for HTML escaping
 function h($str) {
     return htmlspecialchars((string)$str, ENT_QUOTES, 'UTF-8');
+}
+
+// ------------------------
+// ACTION: Add participant
+// ------------------------
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'add_participant') {
+    $firstName  = trim($_POST['first_name'] ?? '');
+    $lastName   = trim($_POST['last_name'] ?? '');
+    $email      = trim($_POST['email'] ?? '');
+    $familyUnit = isset($_POST['family_unit']) ? (int)$_POST['family_unit'] : 0;
+
+    if ($firstName === '' || $email === '') {
+        $error = 'First name and email are required.';
+    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $error = 'Invalid email address.';
+    } else {
+        try {
+            $wishKey = bin2hex(random_bytes(16));
+            $ins = $pdo->prepare("
+                INSERT INTO participants (first_name, last_name, email, family_unit, wish_key)
+                VALUES (:first_name, :last_name, :email, :family_unit, :wish_key)
+            ");
+            $ins->execute([
+                ':first_name'  => mb_substr($firstName, 0, 100),
+                ':last_name'   => mb_substr($lastName, 0, 100),
+                ':email'       => mb_substr($email, 0, 255),
+                ':family_unit' => $familyUnit,
+                ':wish_key'    => $wishKey,
+            ]);
+            $debugMessage = 'Participant added successfully.';
+
+            // Refresh participants list
+            $stmt = $pdo->query("SELECT id, first_name, last_name, email, family_unit, wish_item1, wish_item2, wish_item3, wish_key FROM participants ORDER BY id ASC");
+            $participants = $stmt->fetchAll();
+        } catch (PDOException $e) {
+            $error = 'Failed to add participant: ' . h($e->getMessage());
+        }
+    }
+}
+
+// ------------------------
+// ACTION: Resend email
+// ------------------------
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'resend_email') {
+    $pidToResend = isset($_POST['participant_id']) ? (int)$_POST['participant_id'] : 0;
+    if ($pidToResend > 0) {
+        try {
+            // Find assignment for current year
+            $pairStmt = $pdo->prepare("SELECT receiver_id FROM secret_santa_pairs WHERE year = :year AND giver_id = :giver_id");
+            $pairStmt->execute([':year' => $year, ':giver_id' => $pidToResend]);
+            $pair = $pairStmt->fetch();
+
+            if ($pair) {
+                // Load giver and receiver details
+                $giverStmt = $pdo->prepare("SELECT * FROM participants WHERE id = :id");
+                $giverStmt->execute([':id' => $pidToResend]);
+                $giver = $giverStmt->fetch();
+
+                $receiverStmt = $pdo->prepare("SELECT * FROM participants WHERE id = :id");
+                $receiverStmt->execute([':id' => $pair['receiver_id']]);
+                $receiver = $receiverStmt->fetch();
+
+                if ($giver && $receiver && !empty($giver['email'])) {
+                    $mailer = createMailer($config['smtp']);
+                    $baseUrl = $config['app']['base_url'] ?? '';
+
+                    // We need a way to build the email HTML.
+                    // For now, I'll copy the helper from secret_santa.php or implement a shared one.
+                    // Let's implement it here as a helper for now.
+
+                    $giverName    = h($giver['first_name'] . ' ' . $giver['last_name']);
+                    $receiverName = h($receiver['first_name'] . ' ' . $receiver['last_name']);
+                    $wishKey      = urlencode($giver['wish_key']);
+                    $wishlistUrl  = rtrim($baseUrl, '/') . '/wishes.php?key=' . $wishKey;
+                    $pixelUrl     = rtrim($baseUrl, '/') . '/open.php?pid=' . urlencode($giver['id']) . '&year=' . urlencode((string)$year);
+                    $budget       = h($config['app']['budget_limit'] ?? '$50');
+
+                    $htmlBody = <<<HTML
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Secret Santa $year</title></head>
+<body style="margin:0;padding:0;background:#0b1b33;font-family:Arial,Helvetica,sans-serif;">
+  <div style="max-width:600px;margin:0 auto;padding:20px;">
+    <div style="background:linear-gradient(135deg,#b30000,#006600);border-radius:12px;padding:20px;text-align:center;color:#ffffff;">
+      <h1 style="font-size:32px;margin:0 0 10px;font-weight:bold;letter-spacing:1px;">🎄 Secret Santa $year 🎄</h1>
+      <p style="font-size:16px;margin:10px 0 20px;">Hi <strong>{$giverName}</strong>!<br>The elves have spoken...</p>
+      <div style="background:#ffffff;border-radius:10px;padding:30px;margin:0 auto;max-width:480px;">
+        <p style="font-size:14px;color:#444;margin:0 0 10px;">Your Secret Santa person is:</p>
+        <div style="font-size:30px;font-weight:bold;color:#b30000;margin:10px 0 10px;">{$receiverName}</div>
+        <p style="font-size:14px;color:#333;margin:15px 0 5px;font-weight:bold;">💰 Budget Limit: {$budget}</p>
+        <p style="font-size:13px;color:#444;margin:10px 0;">✅ View <strong>{$receiverName}</strong>'s wish list:<br>
+          <a href="{$wishlistUrl}#recipient" style="color:#006600;font-weight:bold;">View Their Wishes</a></p>
+        <p style="font-size:13px;color:#444;margin:10px 0;">✏️ Enter or update <strong>your own</strong> wish list:<br>
+          <a href="{$wishlistUrl}#mine" style="color:#b30000;font-weight:bold;">Enter My Wishes</a></p>
+      </div>
+      <img src="{$pixelUrl}" alt="" width="1" height="1" style="display:none;opacity:0;">
+    </div>
+  </div>
+</body>
+</html>
+HTML;
+
+                    $mail = clone $mailer;
+                    $mail->clearAllRecipients();
+                    $mail->addAddress($giver['email'], $giverName);
+                    $mail->Subject = "Your Secret Santa Person for $year 🎄 (Resend)";
+                    $mail->Body    = $htmlBody;
+                    $mail->AltBody = "Hi {$giver['first_name']},\n\nYour Secret Santa person for $year is {$receiver['first_name']} {$receiver['last_name']}.\n\nBudget Limit: {$budget}\n\nView wishes here: $wishlistUrl";
+
+                    $mail->send();
+                    $debugMessage = 'Assignment email resent to <strong>' . h($giver['email']) . '</strong>.';
+                } else {
+                    $error = 'Could not find giver/receiver or email is missing.';
+                }
+            } else {
+                $error = 'No assignment found for this participant in ' . h($year) . '. Generate pairings first!';
+            }
+        } catch (Exception $e) {
+            $error = 'Failed to resend email: ' . h($e->getMessage());
+        }
+    }
+}
+
+// ------------------------
+// ACTION: Delete participant
+// ------------------------
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'delete_participant') {
+    $pidToDelete = isset($_POST['participant_id']) ? (int)$_POST['participant_id'] : 0;
+    if ($pidToDelete > 0) {
+        try {
+            $pdo->beginTransaction();
+
+            // Delete pairings where this participant is giver or receiver
+            $delPairs = $pdo->prepare("DELETE FROM secret_santa_pairs WHERE giver_id = :id OR receiver_id = :id");
+            $delPairs->execute([':id' => $pidToDelete]);
+
+            // Delete open stats
+            $delOpens = $pdo->prepare("DELETE FROM email_opens WHERE participant_id = :id");
+            $delOpens->execute([':id' => $pidToDelete]);
+
+            // Delete participant
+            $delPart = $pdo->prepare("DELETE FROM participants WHERE id = :id");
+            $delPart->execute([':id' => $pidToDelete]);
+
+            $pdo->commit();
+            $debugMessage = 'Participant and their associated data deleted.';
+
+            // Refresh participants list
+            $stmt = $pdo->query("SELECT id, first_name, last_name, email, family_unit, wish_item1, wish_item2, wish_item3, wish_key FROM participants ORDER BY id ASC");
+            $participants = $stmt->fetchAll();
+        } catch (PDOException $e) {
+            $pdo->rollBack();
+            $error = 'Failed to delete participant: ' . h($e->getMessage());
+        }
+    }
 }
 
 // ------------------------
@@ -500,11 +669,16 @@ try {
     <?php endif; ?>
 
     <form method="post">
+        <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
         <div class="section-title">Pairing Options</div>
 
         <div>
             <label for="year">Target year:&nbsp;</label>
             <input type="number" name="year" id="year" value="<?php echo h($year); ?>">
+        </div>
+        <div style="margin-top:10px;">
+            <label>Budget Limit: <strong><?php echo h($config['app']['budget_limit'] ?? '$50'); ?></strong></label>
+            <span class="small-note">(Change this via <code>BUDGET_LIMIT</code> environment variable)</span>
         </div>
         <div style="margin-top:10px;">
             <label>
@@ -539,6 +713,35 @@ try {
         <div style="margin-top:15px;">
             <button type="submit" name="action" value="generate">Generate Pairings</button>
             <button type="submit" name="action" value="test_email">Send Test Email</button>
+        </div>
+    </form>
+
+    <form method="post">
+        <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
+        <div class="section-title">Add Single Participant</div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; align-items: flex-end;">
+            <div>
+                <label for="first_name">First Name</label><br>
+                <input type="text" name="first_name" id="first_name" required style="width:140px;">
+            </div>
+            <div>
+                <label for="last_name">Last Name</label><br>
+                <input type="text" name="last_name" id="last_name" style="width:140px;">
+            </div>
+            <div>
+                <label for="email">Email</label><br>
+                <input type="email" name="email" id="email" required style="width:200px;">
+            </div>
+            <div>
+                <label for="family_unit">Family Unit</label><br>
+                <input type="number" name="family_unit" id="family_unit" value="1" required style="width:80px;">
+            </div>
+            <div>
+                <button type="submit" name="action" value="add_participant" style="margin:0;">Add Elf 🎁</button>
+            </div>
+        </div>
+        <div class="small-note">
+            Need to add many? Use the <a href="import_users.php?key=<?php echo h($ADMIN_KEY); ?>" style="color:#ffd700;">CSV Import</a>.
         </div>
     </form>
 
@@ -595,12 +798,11 @@ try {
                 <th>Name</th>
                 <th>Email</th>
                 <th>Family Unit</th>
-                <th>Wish #1</th>
-                <th>Wish #2</th>
-                <th>Wish #3</th>
+                <th>Wishlist Filled?</th>
                 <th>First Open</th>
                 <th>Last Open</th>
                 <th>Opens</th>
+                <th>Manage</th>
             </tr>
         </thead>
         <tbody>
@@ -616,12 +818,34 @@ try {
                 <td><?php echo h($p['first_name'] . ' ' . $p['last_name']); ?></td>
                 <td><?php echo h($p['email']); ?></td>
                 <td><?php echo h($p['family_unit']); ?></td>
-                <td><?php echo h($p['wish_item1'] ?? ''); ?></td>
-                <td><?php echo h($p['wish_item2'] ?? ''); ?></td>
-                <td><?php echo h($p['wish_item3'] ?? ''); ?></td>
+                <td>
+                    <?php if ($p['wish_item1'] || $p['wish_item2'] || $p['wish_item3']): ?>
+                        <span class="badge badge-ok">Yes</span>
+                    <?php else: ?>
+                        <span class="badge badge-warn">No</span>
+                    <?php endif; ?>
+                </td>
                 <td><?php echo h($firstOpen); ?></td>
                 <td><?php echo h($lastOpen); ?></td>
                 <td><?php echo h($openCount); ?></td>
+                <td style="white-space:nowrap;">
+                    <form method="post" style="padding:0;background:none;margin:0;display:inline;">
+                        <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
+                        <input type="hidden" name="participant_id" value="<?php echo $p['id']; ?>">
+                        <button type="submit" name="action" value="resend_email"
+                                style="background:#006600;padding:4px 8px;font-size:11px;margin:0;">
+                            Resend
+                        </button>
+                    </form>
+                    <form method="post" onsubmit="return confirm('Really delete this participant? This will also clear their pairings.');" style="padding:0;background:none;margin:0;display:inline;">
+                        <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
+                        <input type="hidden" name="participant_id" value="<?php echo $p['id']; ?>">
+                        <button type="submit" name="action" value="delete_participant"
+                                style="background:#b30000;padding:4px 8px;font-size:11px;margin:0;">
+                            Delete
+                        </button>
+                    </form>
+                </td>
             </tr>
         <?php endforeach; ?>
         </tbody>
